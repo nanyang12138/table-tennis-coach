@@ -1,0 +1,23 @@
+{
+  "name": "table-tennis-coach",
+  "owner": {
+    "name": "nanyang12138"
+  },
+  "metadata": {
+    "description": "乒乓球技术教练 skill（Table tennis technique coach）",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "table-tennis-coach",
+      "source": "./",
+      "description": "乒乓球技术教练：以马龙、张继科、樊振东为标杆拆解每项技术到身体各部位，并分析你的挥拍视频或照片。",
+      "version": "1.0.0",
+      "author": {
+        "name": "nanyang12138"
+      },
+      "keywords": ["table-tennis", "ping-pong", "乒乓球", "coaching", "video-analysis"],
+      "category": "sports"
+    }
+  ]
+}

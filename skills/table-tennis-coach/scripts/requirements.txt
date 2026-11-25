@@ -1,0 +1,7 @@
+# Installed by setup_env.py into its own environment.
+# mediapipe brings opencv-contrib-python; without mediapipe the analyser runs in frames-only mode
+# with opencv-python-headless instead.
+mediapipe>=0.10.14
+numpy
+# tests only
+pytest

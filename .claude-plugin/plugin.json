@@ -1,0 +1,13 @@
+{
+  "name": "table-tennis-coach",
+  "description": "乒乓球技术教练：以马龙、张继科、樊振东为标杆拆解每项技术到身体各部位，并分析你的挥拍视频或照片。Table tennis technique coach with video analysis.",
+  "version": "1.0.0",
+  "author": {
+    "name": "nanyang12138"
+  },
+  "homepage": "https://github.com/nanyang12138/table-tennis-coach",
+  "repository": "https://github.com/nanyang12138/table-tennis-coach",
+  "license": "MIT",
+  "keywords": ["table-tennis", "ping-pong", "乒乓球", "coaching", "video-analysis", "pose-estimation"],
+  "skills": ["./skills/table-tennis-coach"]
+}
