@@ -126,7 +126,24 @@ def write(out_dir, result):
                 _f((m.get("swing_path") or {}).get("angle_deg")),
                 "是" if m["quality"]["reliable"] else "否"))
         lines.append("")
-        lines.append("角度单位：度；击球高度 0 = 髋、1 = 肩；重心转移 0 = 持拍侧脚、1 = 另一只脚（看 delta 的正负）。各指标的含义和可信度见 references/analysis/metrics-reference.md。")
+        lines.append("角度单位：度；击球高度 0 = 髋、1 = 肩；重心转移 0 = 持拍侧脚、1 = 另一只脚（看 delta 的正负）。\"-\" 表示看不清或这一帧骨架不稳，不给数。各指标的含义和可信度见 references/analysis/metrics-reference.md。")
+        lines.append("")
+        lines.append("### 转体与单帧稳定性")
+        lines.append("| # | 肩宽比 准备→最小（时刻）→击球 | 击球肘角（前后三帧 最小/中位/最大） | 提示 |")
+        lines.append("|---|---|---|---|")
+        for s in strokes:
+            m = s["metrics"]
+            swr = m.get("shoulder_width_ratio") or {}
+            swm = m.get("shoulder_width_min") or {}
+            rng = (m.get("elbow_angle_range_deg") or {}).get("contact")
+            notes = (m.get("quality") or {}).get("notes") or []
+            lines.append("| %d | %s → %s（t=%s） → %s | %s | %s |" % (
+                s["index"], _f(swr.get("ready"), "%.2f"), _f(swm.get("value"), "%.2f"),
+                _f(swm.get("t_file", swm.get("t")), "%.2f"), _f(swr.get("contact"), "%.2f"),
+                "/".join(_f(v) for v in rng) if rng else "-",
+                "；".join(n[:90] for n in notes) or "-"))
+        lines.append("")
+        lines.append("正面机位看转体：肩宽比越小，说明转得越侧；只比准备和击球两帧会漏掉中间的转体。肘角看三帧范围，不要只凭一帧下结论。")
         lines.append("")
         lines.append("## 建议先看的图")
         if data.get("task") in ("auto", None):

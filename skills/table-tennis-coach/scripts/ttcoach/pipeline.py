@@ -335,6 +335,13 @@ def _nearest_index(s, t_real):
     return int(np.argmin(np.abs(s.t - t_real)))
 
 
+def _add_file_times(m, slowmo):
+    sw = m.get("shoulder_width_min")
+    if isinstance(sw, dict) and sw.get("t") is not None:
+        sw["t_file"] = round(sw["t"] * slowmo, 3)
+    return m
+
+
 def _phases_dict(s, ph, slowmo):
     return {name: {"i": int(idx), "frame": int(s.frame_idx[idx]), "t": round(float(s.t[idx]), 3),
                    "t_file": round(float(s.t[idx]) * slowmo, 3)} for name, idx in ph.as_dict().items()}
@@ -349,7 +356,7 @@ def measure_strokes(s, hand, phase_times, slowmo=1.0, side=None):
     for k, g in enumerate(parse_strokes(phase_times)):
         r, b, c, f, rc = [_nearest_index(s, t / slowmo) for t in g]
         ph = signals.Phases(ready=r, backswing_end=b, mid_forward=(b + c) // 2, contact=c, finish=f, recovery=rc)
-        m = metrics.stroke_metrics(s, ph, hand)
+        m = _add_file_times(metrics.stroke_metrics(s, ph, hand), slowmo)
         if side:
             m["side_guess"] = side
         out.append({"index": k + 1, "source": "given", "t_contact_s": round(float(s.t[c]), 3),
@@ -564,7 +571,7 @@ def _auto_strokes(result, s, hand):
         if too_small(s, hand, ph):
             dropped.append({"i": int(pk), "t": round(float(s.t[pk]), 3), "reason": "hand travel too small for a stroke"})
             continue
-        m = metrics.stroke_metrics(s, ph, hand)
+        m = _add_file_times(metrics.stroke_metrics(s, ph, hand), slowmo)
         strokes.append({"index": len(strokes) + 1, "source": "auto", "t_contact_s": round(float(s.t[pk]), 3),
                         "t_contact_file_s": round(float(s.t[pk]) * slowmo, 3), "side_guess": m["side_guess"],
                         "phases": _phases_dict(s, ph, slowmo), "metrics": m})

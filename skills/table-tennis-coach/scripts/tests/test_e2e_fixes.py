@@ -114,3 +114,46 @@ def test_auto_summary_sends_reader_to_timeline_not_to_a_typical_stroke(tmp_path)
     text = report.write(tmp_path, res).read_text(encoding="utf-8")
     assert "最典型" not in text
     assert "timeline_" in text
+
+
+def test_skeleton_jump_at_a_phase_frame_blanks_that_phase():
+    poses = [dict() for _ in range(40)]
+    poses[30] = {"right_wrist": (0.25, -0.6, -0.15), "right_elbow": (0.1, -0.4, 0.0)}  # finish frame glitch
+    m = metrics.stroke_metrics(build_series(poses), PH, hand="right")
+    assert m["elbow_angle_deg"]["finish"] is None
+    assert m["finish_height_level"] is None
+    assert m["quality"]["reliable"] is False
+    assert any("finish" in n and "unstable" in n for n in m["quality"]["notes"])
+    assert m["elbow_angle_deg"]["contact"] is not None
+
+
+def test_elbow_angle_range_over_neighbouring_frames():
+    m = metrics.stroke_metrics(build_series([{}] * 40), PH, hand="right")
+    lo, med, hi = m["elbow_angle_range_deg"]["contact"]
+    assert lo <= med <= hi
+
+
+def test_shoulder_width_minimum_between_ready_and_contact():
+    poses = [dict() for _ in range(40)]
+    for i in range(12, 16):   # trunk turned sideways: shoulders close together in the image
+        poses[i] = {"left_shoulder": (0.05, -0.5, -0.19), "right_shoulder": (-0.05, -0.5, 0.19)}
+    m = metrics.stroke_metrics(build_series(poses), PH, hand="right")
+    sw = m["shoulder_width_min"]
+    assert sw["value"] == pytest.approx(0.2, abs=0.03)
+    assert 12 <= sw["i"] <= 15
+
+
+def test_trunk_tilt_2d():
+    m = metrics.stroke_metrics(build_series([{}] * 40), PH, hand="right")
+    assert m["trunk_tilt_2d_deg"]["contact"] == pytest.approx(0.0, abs=0.5)
+    lean = {"left_shoulder": (0.2 + 0.5, -0.5, 0.0), "right_shoulder": (-0.2 + 0.5, -0.5, 0.0)}
+    m2 = metrics.stroke_metrics(build_series([lean] * 40), PH, hand="right")
+    assert m2["trunk_tilt_2d_deg"]["contact"] == pytest.approx(45.0, abs=1.0)
+
+
+def test_arm_falling_from_a_high_finish_is_not_a_forward_swing():
+    # wrist above the shoulder, moving down and across the body (recovery after a high finish)
+    pts = [(-0.30 + 0.03 * k, -0.9 + 0.05 * k) for k in range(20)]
+    s = build_series([{"right_wrist": (x, y, -0.2)} for x, y in pts], fps=50)
+    sc = pipeline.swing_scores(s, "right")
+    assert sc[5] < -0.2

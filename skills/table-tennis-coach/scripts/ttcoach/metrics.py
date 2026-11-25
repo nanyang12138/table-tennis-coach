@@ -286,6 +286,19 @@ def stroke_metrics(s, ph, hand):
 
     out["trunk_lean_deg"] = {"backswing_end": num(lean(b), 1), "contact": num(lean(c), 1)}
 
+    def tilt2d(i):
+        if not seen(s, i, *HIPS, *SHOULDERS):
+            return float("nan")
+        v = _sh_mid_p(s, i) - _hip_mid_p(s, i)
+        return g.angle_3pt((v[0], v[1]), (0.0, 0.0), (0.0, -1.0))
+    out["trunk_tilt_2d_deg"] = {"backswing_end": num(tilt2d(b), 1), "contact": num(tilt2d(c), 1)}
+
+    def elbow_range(i):
+        vals = [elbow(j) for j in (i - 1, i, i + 1) if 0 <= j < len(s)]
+        vals = [v for v in vals if np.isfinite(v)]
+        return [num(min(vals), 1), num(float(np.median(vals)), 1), num(max(vals), 1)] if vals else None
+    out["elbow_angle_range_deg"] = {"backswing_end": elbow_range(b), "contact": elbow_range(c), "finish": elbow_range(f)}
+
     fb = g.facing_vector(_W(s, b, "left_shoulder"), _W(s, b, "right_shoulder"), _W(s, b, "nose"))
     trunk_b = seen(s, b, *SHOULDERS, "nose")
     out["shoulder_turn_deg"] = num(g.horizontal_turn_deg(_W(s, b, p + "_shoulder") - _sh_mid_w(s, b),
@@ -306,6 +319,13 @@ def stroke_metrics(s, ph, hand):
         return d / T if np.isfinite(T) and T > 0 else float("nan")
     out["shoulder_width_ratio"] = {"ready": num(swr(r), 2), "backswing_end": num(swr(b), 2),
                                    "contact": num(swr(c), 2), "finish": num(swr(f), 2)}
+    widths = [(swr(i), i) for i in range(r, c + 1)]
+    widths = [(v, i) for v, i in widths if np.isfinite(v)]
+    if widths:
+        v, i = min(widths)
+        out["shoulder_width_min"] = {"value": num(v, 2), "i": int(i), "t": num(s.t[i], 3)}
+    else:
+        out["shoulder_width_min"] = None
 
     feet_hidden = "left_ankle" in hidden or "right_ankle" in hidden
     wb, wf = (float("nan"), float("nan")) if feet_hidden else (_weight_ratio(s, b, hand), _weight_ratio(s, f, hand))
@@ -375,6 +395,52 @@ def stroke_metrics(s, ph, hand):
         else float("nan")
     out["recovery_dist"] = num(rd / T, 2) if np.isfinite(rd) and np.isfinite(T) and T > 0 else None
 
+    # skeleton stability at the three key phase frames: a joint that jumps away from both neighbours,
+    # a torso that suddenly changes length, or 3-D and 2-D elbow angles that disagree -> do not trust that frame
+    def unstable(i):
+        why = []
+        if 0 < i < len(s) - 1:
+            for nm in (p + "_wrist", p + "_elbow"):
+                a, x, z = _P(s, i - 1, nm), _P(s, i, nm), _P(s, i + 1, nm)
+                if np.all(np.isfinite(np.r_[a, x, z])) and np.isfinite(T) and T > 0 \
+                        and np.linalg.norm(x - (a + z) / 2.0) > 0.3 * T:
+                    why.append(nm + " jumps")
+            tl = [np.linalg.norm(_sh_mid_p(s, j) - _hip_mid_p(s, j)) for j in (i - 1, i, i + 1)]
+            if all(np.isfinite(tl)) and min(tl[0], tl[2]) > 0 and \
+                    abs(tl[1] - (tl[0] + tl[2]) / 2.0) > 0.35 * (tl[0] + tl[2]) / 2.0:
+                why.append("torso length jumps")
+        return why
+
+    blank = {"backswing_end": [("elbow_angle_deg", "backswing_end"), ("trunk_lean_deg", "backswing_end"),
+                               ("trunk_tilt_2d_deg", "backswing_end"), ("shoulder_width_ratio", "backswing_end"),
+                               ("x_factor_deg", None), ("shoulder_turn_deg", None), ("hip_turn_deg", None),
+                               ("swing_path", "up"), ("swing_path", "horiz"), ("swing_path", "angle_deg"),
+                               ("weight_shift", "backswing_end"), ("weight_shift", "delta")],
+             "contact": [("elbow_angle_deg", "contact"), ("contact_height_level", None), ("contact_forward_m", None),
+                         ("contact_lateral_m", None), ("elbow_body_gap_m", None), ("free_arm_height_level", None),
+                         ("trunk_lean_deg", "contact"), ("trunk_tilt_2d_deg", "contact"), ("shoulder_width_ratio", "contact")],
+             "finish": [("elbow_angle_deg", "finish"), ("finish_height_level", None), ("head_level_finish", None),
+                        ("shoulder_turn_deg", None), ("hip_turn_deg", None), ("swing_path", "up"),
+                        ("swing_path", "horiz"), ("swing_path", "angle_deg"), ("weight_shift", "finish"),
+                        ("weight_shift", "delta"), ("shoulder_width_ratio", "finish")]}
+    shaky = False
+    for name, idx in (("backswing_end", b), ("contact", c), ("finish", f)):
+        a3, a2 = elbow(idx), elbow2d(idx)
+        if name != "contact" and np.isfinite(a3) and np.isfinite(a2) and abs(a3 - a2) > 45:
+            notes.append("%s elbow angle: 3-D %.0f vs 2-D %.0f differ a lot (forearm pointing at/away from the "
+                         "camera, or the skeleton is misplaced: check the image)" % (name, a3, a2))
+        why = unstable(idx)
+        if why:
+            shaky = True
+            notes.append("%s frame unstable (%s): its numbers are blanked, check the image" % (name, ", ".join(why)))
+            for key, sub in blank[name]:
+                if sub is None:
+                    out[key] = None
+                elif isinstance(out.get(key), dict):
+                    out[key][sub] = None
+            if name == "contact":
+                out["side_guess"] = "unclear"
+
     implausible = []
     for key, lim in (("shoulder_turn_deg", 120), ("hip_turn_deg", 120)):
         if out.get(key) is not None and abs(out[key]) > lim:
@@ -385,12 +451,10 @@ def stroke_metrics(s, ph, hand):
         implausible.append("trunk_lean_deg.contact %.0f" % out["trunk_lean_deg"]["contact"])
     if out.get("peak_hand_speed") is not None and out["peak_hand_speed"] > MAX_HAND_SPEED:
         implausible.append("peak_hand_speed %.1f" % out["peak_hand_speed"])
-    if np.isfinite(e3) and np.isfinite(e2) and abs(e3 - e2) > 45:
-        implausible.append("elbow 3-D %.0f vs 2-D %.0f" % (e3, e2))
     if implausible:
         notes.append("implausible values (skeleton probably wrong in some frames, check the images): " + ", ".join(implausible))
     out["quality"] = _quality(s, b, f, hand, notes)
-    if implausible:
+    if implausible or shaky:
         out["quality"]["reliable"] = False
     return out
 
