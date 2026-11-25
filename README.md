@@ -1,4 +1,4 @@
-# table-tennis-coach · 乒乓球技术教练（Claude Code Skill）
+# table-tennis-coach · 乒乓球技术教练
 
 以**马龙、张继科、樊振东**为标杆的乒乓球技术 skill，主要做两件事：
 
