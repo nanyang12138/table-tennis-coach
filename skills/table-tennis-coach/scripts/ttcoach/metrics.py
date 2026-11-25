@@ -14,6 +14,7 @@ from .landmarks import IDX, side_names
 FOREHAND_LATERAL_M = 0.15   # wrist this far out to the playing side of the hip centre at contact -> forehand
 BACKHAND_LATERAL_M = 0.08   # wrist closer than this (or across the body) -> backhand
 MIN_FPS_FOR_SEQUENCE = 100.0
+MAX_HAND_SPEED = 20.0  # torso lengths/s (about 10 m/s at the wrist): faster means the skeleton jumped
 
 
 def num(x, nd=None):
@@ -228,6 +229,9 @@ def stroke_metrics(s, ph, hand):
     r, b, m, c, f, rc = ph.ready, ph.backswing_end, ph.mid_forward, ph.contact, ph.finish, ph.recovery
     notes = []
     T, Tm = torso_px(s), torso_m(s)
+    core = slice(b, f + 1)  # the swing itself; ready/recovery frames may lack a pose without harming it
+    hidden = {n for n in ("left_knee", "right_knee", "left_ankle", "right_ankle", "left_hip", "right_hip")
+              if f >= b and float(np.mean(s.vis[core, IDX[n]])) < VIS_MIN}
 
     def ms(a, z):
         return num((z - a) / fps * 1000.0, 0)
@@ -243,6 +247,8 @@ def stroke_metrics(s, ph, hand):
         return g.angle_3pt(_P(s, i, p + "_shoulder"), _P(s, i, p + "_elbow"), _P(s, i, p + "_wrist"))
 
     def knee(i, side):
+        if side + "_knee" in hidden or side + "_ankle" in hidden:
+            return float("nan")  # mostly hidden during the swing: single "visible" frames are often the table edge
         if not seen(s, i, side + "_hip", side + "_knee", side + "_ankle"):
             return float("nan")
         return g.angle_3pt(_W(s, i, side + "_hip"), _W(s, i, side + "_knee"), _W(s, i, side + "_ankle"))
@@ -298,9 +304,11 @@ def stroke_metrics(s, ph, hand):
             return float("nan")
         d = np.linalg.norm(_P(s, i, "left_shoulder") - _P(s, i, "right_shoulder"))
         return d / T if np.isfinite(T) and T > 0 else float("nan")
-    out["shoulder_width_ratio"] = {"backswing_end": num(swr(b), 2), "contact": num(swr(c), 2)}
+    out["shoulder_width_ratio"] = {"ready": num(swr(r), 2), "backswing_end": num(swr(b), 2),
+                                   "contact": num(swr(c), 2), "finish": num(swr(f), 2)}
 
-    wb, wf = _weight_ratio(s, b, hand), _weight_ratio(s, f, hand)
+    feet_hidden = "left_ankle" in hidden or "right_ankle" in hidden
+    wb, wf = (float("nan"), float("nan")) if feet_hidden else (_weight_ratio(s, b, hand), _weight_ratio(s, f, hand))
     out["weight_shift"] = {"backswing_end": num(wb, 2), "finish": num(wf, 2), "delta": num(wf - wb, 2)}
 
     out["contact_height_level"] = num(lvl(c, p + "_wrist"), 2)
@@ -359,7 +367,7 @@ def stroke_metrics(s, ph, hand):
     la, ra = _W(s, r, "left_ankle"), _W(s, r, "right_ankle")
     shw = np.linalg.norm(ls - rs)
     out["stance_width_ratio"] = num(np.linalg.norm(la - ra) / shw, 2) \
-        if np.isfinite(shw) and shw > 0 and seen(s, r, *SHOULDERS, "left_ankle", "right_ankle") else None
+        if np.isfinite(shw) and shw > 0 and not feet_hidden and seen(s, r, *SHOULDERS, "left_ankle", "right_ankle") else None
 
     def rel_p(i):
         return _P(s, i, p + "_wrist") - _hip_mid_p(s, i)
@@ -367,7 +375,23 @@ def stroke_metrics(s, ph, hand):
         else float("nan")
     out["recovery_dist"] = num(rd / T, 2) if np.isfinite(rd) and np.isfinite(T) and T > 0 else None
 
-    out["quality"] = _quality(s, r, rc, hand, notes)
+    implausible = []
+    for key, lim in (("shoulder_turn_deg", 120), ("hip_turn_deg", 120)):
+        if out.get(key) is not None and abs(out[key]) > lim:
+            implausible.append("%s %.0f" % (key, out[key]))
+    if out.get("contact_height_level") is not None and not (-1.0 <= out["contact_height_level"] <= 2.5):
+        implausible.append("contact_height_level %.2f" % out["contact_height_level"])
+    if (out.get("trunk_lean_deg") or {}).get("contact") is not None and out["trunk_lean_deg"]["contact"] > 60:
+        implausible.append("trunk_lean_deg.contact %.0f" % out["trunk_lean_deg"]["contact"])
+    if out.get("peak_hand_speed") is not None and out["peak_hand_speed"] > MAX_HAND_SPEED:
+        implausible.append("peak_hand_speed %.1f" % out["peak_hand_speed"])
+    if np.isfinite(e3) and np.isfinite(e2) and abs(e3 - e2) > 45:
+        implausible.append("elbow 3-D %.0f vs 2-D %.0f" % (e3, e2))
+    if implausible:
+        notes.append("implausible values (skeleton probably wrong in some frames, check the images): " + ", ".join(implausible))
+    out["quality"] = _quality(s, b, f, hand, notes)
+    if implausible:
+        out["quality"]["reliable"] = False
     return out
 
 
@@ -388,7 +412,10 @@ def photo_metrics(s, hand, i=0):
     shw = np.linalg.norm(_W(s, i, "left_shoulder") - _W(s, i, "right_shoulder"))
     stw = np.linalg.norm(_W(s, i, "left_ankle") - _W(s, i, "right_ankle"))
     feet_ok = seen(s, i, "left_ankle", "right_ankle", *SHOULDERS)
+    T = torso_px(s)
+    swd = np.linalg.norm(_P(s, i, "left_shoulder") - _P(s, i, "right_shoulder"))
     return {
+        "shoulder_width_ratio": num(swd / T, 2) if seen(s, i, *SHOULDERS) and np.isfinite(T) and T > 0 else None,
         "elbow_angle_deg": {"playing": ang(p, "_shoulder", "_elbow", "_wrist"),
                             "other": ang(o, "_shoulder", "_elbow", "_wrist")},
         "knee_angle_deg": {"playing": ang(p, "_hip", "_knee", "_ankle"), "other": ang(o, "_hip", "_knee", "_ankle")},
@@ -426,7 +453,8 @@ def video_metrics(strokes):
               "cv": num(np.std(iv) / np.mean(iv), 2) if len(iv) >= 2 and np.mean(iv) > 0 else None}
     cons = {}
     for side in ("forehand", "backhand", "unclear"):
-        group = [st for st in strokes if st.get("side_guess") == side]
+        group = [st for st in strokes if st.get("side_guess") == side
+                 and ((st.get("metrics") or {}).get("quality") or {}).get("reliable", True)]
         if not group:
             continue
         cons[side] = {}

@@ -12,7 +12,8 @@ Run it with the Python that scripts/setup_env.py prints (TTCOACH_PYTHON). Typica
 All times are in seconds of the video file, the same numbers printed as t=... on the images.
 For slow-motion files exported at normal speed add --capture-fps 120 (or 240).
 Outputs go to --out (default ./ttcoach_<video name>); follow-up runs with the same --out reuse
-the cached pose tracking.
+the cached pose tracking. Each --timeline / --at / --strokes run writes its own sub-folder
+(timeline_<start>-<end>/, at_<times>/, measured_<n>/) and prints it as out_dir.
 """
 import argparse
 import contextlib
@@ -67,7 +68,9 @@ def main(argv=None):
     ap.add_argument("--timeline", nargs="+", type=float, metavar="T",
                     help="START END [STEP]: dense frames for one window (file seconds)")
     ap.add_argument("--strokes", help='phase times per stroke: "ready,backswing_end,contact,finish,recovery; ..."')
-    ap.add_argument("--at", help="comma-separated times to measure single moments")
+    ap.add_argument("--at", help="comma-separated times to measure single moments (720 px frames, good for spotting the ball)")
+    ap.add_argument("--side", choices=["forehand", "backhand"],
+                    help="with --strokes: all given strokes are this side (replaces the script's guess)")
     a = ap.parse_args(argv)
     if a.timeline is not None and len(a.timeline) not in (2, 3):
         ap.error("--timeline needs START END [STEP]")
@@ -82,7 +85,7 @@ def main(argv=None):
         with native_stderr_to(log):
             res = pipeline.run(a.input, out, hand=a.hand, capture_fps=a.capture_fps, start=a.start, end=a.end,
                                player=a.player, model=a.model, frames_only=a.frames_only, max_side=a.max_side,
-                               timeline=a.timeline, strokes=a.strokes, at=a.at)
+                               timeline=a.timeline, strokes=a.strokes, at=a.at, side=a.side)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         print("ERROR: %s" % e, file=sys.stderr)
         return 2

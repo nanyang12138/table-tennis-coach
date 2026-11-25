@@ -234,11 +234,14 @@ def test_given_phases_are_measured_and_cached(tmp_path):
     assert res["task"] == "strokes" and len(res["strokes"]) == 1
     st = res["strokes"][0]
     assert st["phases"]["contact"]["t_file"] == pytest.approx(5.60, abs=0.03)
-    assert (out / "measured" / "measured_01_sheet.jpg").exists()
+    assert (out / "measured_1" / "measured_01_sheet.jpg").exists()
     assert (out / "pose_cache.npz").exists()
     res2 = pipeline.run(vid("topspin_drive.ogv"), str(out), hand="right", at="5.60")
     assert res2["task"] == "at" and res2["at"][0]["pose_found"]
-    assert (out / "at" / "at_01.jpg").exists()
+    assert (out / "at_5.60" / "at_01.jpg").exists()
+    res3 = pipeline.run(vid("topspin_drive.ogv"), str(out), hand="right", strokes="5.28,5.44,5.60,5.72,6.00",
+                        side="forehand")
+    assert res3["out_dir"].endswith("measured_2") and res3["strokes"][0]["side_guess"] == "forehand"
 
 
 def test_single_frame_landmark_dropout_is_repaired():

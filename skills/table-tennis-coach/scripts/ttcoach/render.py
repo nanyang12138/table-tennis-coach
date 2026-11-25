@@ -87,13 +87,22 @@ def banner(img, text, height=34):
     return np.vstack([bar, img])
 
 
-def hand_box(xy_orig, vis, hand, torso_orig, frame_shape, size_torso=1.4):
-    """Square box (x0, y0, x1, y1) in original pixels around the playing hand, sized to hold the racket."""
+def hand_box(xy_orig, vis, hand, torso_orig, frame_shape, size_torso=1.9):
+    """Square box (x0, y0, x1, y1) in original pixels around the playing hand and racket.
+
+    The centre is pushed along the forearm (elbow -> wrist) so an extended arm does not cut off the racket head.
+    """
     js = [IDX[hand + "_" + n] for n in ("wrist", "index", "pinky", "thumb")]
     pts = np.array([xy_orig[j] for j in js if np.all(np.isfinite(xy_orig[j]))])
     if len(pts) == 0 or not np.isfinite(torso_orig) or torso_orig <= 0:
         return None
     cx, cy = pts.mean(axis=0)
+    el, wr = xy_orig[IDX[hand + "_elbow"]], xy_orig[IDX[hand + "_wrist"]]
+    if np.all(np.isfinite(el)) and np.all(np.isfinite(wr)):
+        d = wr - el
+        n = np.linalg.norm(d)
+        if n > 0:
+            cx, cy = cx + 0.45 * torso_orig * d[0] / n, cy + 0.45 * torso_orig * d[1] / n
     half = 0.5 * size_torso * torso_orig
     h, w = frame_shape[:2]
     x0, y0 = int(round(cx - half)), int(round(cy - half))

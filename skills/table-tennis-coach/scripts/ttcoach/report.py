@@ -29,8 +29,12 @@ def _f(v, fmt="%.0f"):
     return "-" if v is None else fmt % v
 
 
-def pick_examples(strokes):
-    """Per side: the most typical stroke and the one most unlike the others (by z-score of key metrics)."""
+def pick_examples(strokes, task=None):
+    """Per side: the most typical stroke and the one most unlike the others (by z-score of key metrics).
+
+    Auto-detected candidates are not verified yet, so nothing is recommended for them (task='auto')."""
+    if task == "auto":
+        return []
     keys = [("elbow_angle_deg", "contact"), ("knee_min_deg", "playing"), ("shoulder_turn_deg", None),
             ("contact_height_level", None), ("forward_ms", None)]
     picks = []
@@ -125,6 +129,9 @@ def write(out_dir, result):
         lines.append("角度单位：度；击球高度 0 = 髋、1 = 肩；重心转移 0 = 持拍侧脚、1 = 另一只脚（看 delta 的正负）。各指标的含义和可信度见 references/analysis/metrics-reference.md。")
         lines.append("")
         lines.append("## 建议先看的图")
+        if data.get("task") in ("auto", None):
+            lines.append("- 先看 timeline_01.jpg 起的各页：弄清整段有几板、各在什么时间、是什么技术。")
+            lines.append("- 再逐个看 stroke_NN_strip.jpg：核对这个候选是不是真的一板、标的击球时刻对不对。")
         for idx, why in data.get("examples", []):
             lines.append("- %s_%02d_sheet.jpg、%s_%02d_zoom.jpg、%s_%02d_strip.jpg：%s" % (prefix, idx, prefix, idx, prefix, idx, why))
         lines.append("")

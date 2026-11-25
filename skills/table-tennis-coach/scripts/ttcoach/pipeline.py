@@ -172,10 +172,32 @@ def repair_dropouts(s, vis_min=0.5):
     return fixed
 
 
+def left_right_swaps(s, min_width_torso=0.3):
+    """Frames whose left/right shoulder order is opposite to the clip's usual order (the pose model
+    mixed up left and right). Only judged when the shoulders are clearly apart in the image."""
+    L = s.img[:, IDX["left_shoulder"]] - s.img[:, IDX["right_shoulder"]]
+    T = metrics.torso_px(s)
+    out = np.zeros(len(s), bool)
+    ok = s.present & np.all(np.isfinite(L), axis=1)
+    if ok.sum() < 5 or not np.isfinite(T) or T <= 0:
+        return out
+    Lm = np.median(L[ok], axis=0)
+    if np.linalg.norm(Lm) < min_width_torso * T:
+        return out
+    wide = np.linalg.norm(L, axis=1) > min_width_torso * T
+    out = ok & wide & (L @ Lm < 0)
+    return out
+
+
 def clean_series(s, max_jump_torso=0.5, max_scale_change=0.3):
     """Repair one-frame joint dropouts, then blank frames where tracking jumps (cut, switched person).
     Returns how many frames were blanked."""
     repair_dropouts(s)
+    swapped = left_right_swaps(s)
+    s.present[swapped] = False
+    s.img[swapped] = np.nan
+    s.world[swapped] = np.nan
+    s.vis[swapped] = 0.0
     sh = (s.img[:, IDX["left_shoulder"]] + s.img[:, IDX["right_shoulder"]]) / 2.0
     hp = (s.img[:, IDX["left_hip"]] + s.img[:, IDX["right_hip"]]) / 2.0
     tl = np.linalg.norm(sh - hp, axis=1)
@@ -318,16 +340,45 @@ def _phases_dict(s, ph, slowmo):
                    "t_file": round(float(s.t[idx]) * slowmo, 3)} for name, idx in ph.as_dict().items()}
 
 
-def measure_strokes(s, hand, phase_times, slowmo=1.0):
-    """Metrics for strokes whose phase times (file seconds) were chosen by looking at the frames."""
+def measure_strokes(s, hand, phase_times, slowmo=1.0, side=None):
+    """Metrics for strokes whose phase times (file seconds) were chosen by looking at the frames.
+    side ('forehand'/'backhand'), when given, replaces the script's guess for every stroke."""
+    if side not in (None, "forehand", "backhand"):
+        raise ValueError("side must be forehand or backhand")
     out = []
     for k, g in enumerate(parse_strokes(phase_times)):
         r, b, c, f, rc = [_nearest_index(s, t / slowmo) for t in g]
         ph = signals.Phases(ready=r, backswing_end=b, mid_forward=(b + c) // 2, contact=c, finish=f, recovery=rc)
         m = metrics.stroke_metrics(s, ph, hand)
+        if side:
+            m["side_guess"] = side
         out.append({"index": k + 1, "source": "given", "t_contact_s": round(float(s.t[c]), 3),
                     "t_contact_file_s": round(float(s.t[c]) * slowmo, 3), "side_guess": m["side_guess"],
-                    "phases": _phases_dict(s, ph, slowmo), "metrics": m})
+                    "side_given": bool(side), "phases": _phases_dict(s, ph, slowmo), "metrics": m})
+    return out
+
+
+def timeline_frames(t0, t1, step, fps):
+    """Source frame indices from t0 to t1 (file seconds) every `step` seconds, snapped to the frame grid."""
+    first = int(np.ceil(t0 * fps - 1e-6))
+    last = int(np.floor(t1 * fps + 1e-6))
+    k = max(1, int(round(step * fps)))
+    return list(range(first, last + 1, k))
+
+
+def task_dir(out, task, timeline=None, at=None):
+    """Folder for one run: auto -> out; each --timeline / --at / --strokes run gets its own sub-folder."""
+    out = Path(out)
+    if task == "timeline":
+        return out / ("timeline_%.2f-%.2f" % (float(timeline[0]), float(timeline[1])))
+    if task == "at":
+        ts = ["%.2f" % t for t in at[:6]]
+        return out / ("at_" + "_".join(ts) + ("_etc" if len(at) > 6 else ""))
+    if task == "strokes":
+        k = 1
+        while (out / ("measured_%d" % k)).exists():
+            k += 1
+        return out / ("measured_%d" % k)
     return out
 
 
@@ -399,7 +450,7 @@ class _Frames:
         return self.map[int(self.sorted[j])]
 
 
-def _render_timeline(path, frames_to_draw, s, s_a, hand, slowmo, file_fps, out_dir, prefix, per_page=20, cols=4, tile_w=320):
+def _render_timeline(path, frames_to_draw, s, s_a, hand, slowmo, file_fps, out_dir, prefix, per_page=20, cols=4, tile_w=330):
     """Pages of frames (file indices) with skeleton and time labels; returns written file names."""
     nf = _Frames(s)
     tiles = {}
@@ -526,7 +577,8 @@ def _auto_strokes(result, s, hand):
 
 
 def run(input_path, out_dir, hand="right", capture_fps=None, start=None, end=None, player="auto",
-        model="full", frames_only=False, max_side=960, target_fps=120.0, strokes=None, at=None, timeline=None):
+        model="full", frames_only=False, max_side=960, target_fps=120.0, strokes=None, at=None, timeline=None,
+        side=None):
     """Analyse a video (auto candidates), or measure Claude-chosen moments (--strokes / --at / --timeline)."""
     if not os.path.exists(input_path):
         raise FileNotFoundError(input_path)
@@ -590,7 +642,7 @@ def run(input_path, out_dir, hand="right", capture_fps=None, start=None, end=Non
              "height": info.height, "duration_s": round(info.duration_s, 2),
              "analysed_range_s": [round(first / file_fps, 2), round(last / file_fps, 2)]}
     task = "strokes" if given_strokes else "at" if at_times else "timeline" if timeline else "auto"
-    sub = {"auto": out, "strokes": out / "measured", "at": out / "at", "timeline": out / "timeline"}[task]
+    sub = task_dir(out, task, timeline=timeline, at=at_times)
     sub.mkdir(parents=True, exist_ok=True)
     result = {"kind": "video", "task": task, "tool_version": __version__, "mode": mode, "hand": hand, "player": player,
               "video": vinfo, "warnings": warnings, "strokes": [], "files": []}
@@ -614,11 +666,13 @@ def run(input_path, out_dir, hand="right", capture_fps=None, start=None, end=Non
 
     if task == "timeline":
         t0, t1 = float(timeline[0]), float(timeline[1])
-        step = float(timeline[2]) if len(timeline) > 2 and timeline[2] else max(1.0 / file_fps, (t1 - t0) / 39.0)
-        fr_ids = sorted(set(int(round(t * file_fps)) for t in timeline_times(t0, t1, step)))
-        fr_ids = [f for f in fr_ids if first <= f <= last][:120]
+        step = float(timeline[2]) if len(timeline) > 2 and timeline[2] else max(1.0 / file_fps, (t1 - t0) / 29.0)
+        fr_ids = [f for f in timeline_frames(t0, t1, step, file_fps) if first <= f <= last]
+        if len(fr_ids) > 90:
+            warnings.append(warn("TIMELINE_CAPPED", "这个窗口要出 %d 帧，只出了前 90 帧；请缩小窗口或加大步长。" % len(fr_ids)))
+            fr_ids = fr_ids[:90]
         result["timeline"] = {"start": t0, "end": t1, "step": step, "frames": len(fr_ids)}
-        _render_timeline(input_path, fr_ids, s, s_a, hand, slowmo, file_fps, sub, "timeline")
+        _render_timeline(input_path, fr_ids, s, s_a, hand, slowmo, file_fps, sub, "timeline", per_page=15, cols=3, tile_w=480)
     elif task == "at":
         result["at"] = []
         nf = _Frames(s)
@@ -643,7 +697,7 @@ def run(input_path, out_dir, hand="right", capture_fps=None, start=None, end=Non
             render.put_lines(img, ["AT %d  %s  frame %d" % (k, _tlabel(fidx / file_fps / slowmo, slowmo), fidx)])
             cv2.imwrite(str(sub / ("at_%02d.jpg" % k)), img, [cv2.IMWRITE_JPEG_QUALITY, 88])
     elif task == "strokes":
-        result["strokes"] = measure_strokes(s, hand, given_strokes, slowmo=slowmo)
+        result["strokes"] = measure_strokes(s, hand, given_strokes, slowmo=slowmo, side=side)
         _render_strokes(result["strokes"], s, input_path, sub, hand, s_a, vinfo, prefix="measured")
     else:
         if mode == "pose":
@@ -655,12 +709,13 @@ def run(input_path, out_dir, hand="right", capture_fps=None, start=None, end=Non
             _motion_strokes(result, input_path, sub, stride, first, last, file_fps, slowmo)
         dur = (last - first + 1) / file_fps
         step = auto_timeline_step(dur)
-        fr_ids = sorted(set(int(round(t * file_fps)) for t in timeline_times(first / file_fps, last / file_fps, step)))
-        result["timeline"] = {"start": round(first / file_fps, 2), "end": round(last / file_fps, 2), "step": step}
+        fr_ids = timeline_frames(first / file_fps, last / file_fps, step, file_fps)
+        result["timeline"] = {"start": round(first / file_fps, 2), "end": round(last / file_fps, 2), "step": step,
+                              "frames": len(fr_ids)}
         _render_timeline(input_path, [f for f in fr_ids if first <= f <= last], s, s_a, hand, slowmo, file_fps, sub, "timeline")
 
     result["video_metrics"] = metrics.video_metrics(result["strokes"])
-    result["examples"] = report.pick_examples(result["strokes"]) if result["strokes"] else []
+    result["examples"] = report.pick_examples(result["strokes"], task=task) if result["strokes"] else []
     report.write(sub, result)
     result["files"] = sorted(p.name for p in sub.iterdir() if p.is_file())
     result["out_dir"] = str(sub)
